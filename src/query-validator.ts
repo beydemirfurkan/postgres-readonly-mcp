@@ -34,19 +34,22 @@ export const FORBIDDEN_KEYWORDS = [
 ] as const;
 
 /**
- * Patterns that are allowed even though they contain forbidden keywords
- * These are read-only commands that display information about objects
+ * List of allowed SQL statement types (strict read-only mode)
  */
-const ALLOWED_PATTERNS_WITH_FORBIDDEN_KEYWORDS = [
-    /^EXPLAIN\s+/i,                  // EXPLAIN can contain any query for analysis
-    /^SHOW\s+/i                      // SHOW commands in Postgres are generally safe configuration views
-] as const;
+export const ALLOWED_STATEMENTS = ['SELECT'] as const;
 
 /**
- * List of allowed SQL statement types (read-only operations)
+ * Function patterns that can be abused for denial-of-service or file/network access
  */
-export const ALLOWED_STATEMENTS = ['SELECT', 'SHOW', 'EXPLAIN', 'VALUES', 'WITH'] as const;
-// Added VALUES and WITH as they can be used for CTEs and data generation in read-only context.
+const BLOCKED_FUNCTION_PATTERNS = [
+    /\bpg_sleep\s*\(/i,
+    /\bdblink\s*\(/i,
+    /\bpg_read_file\s*\(/i,
+    /\bpg_read_binary_file\s*\(/i,
+    /\bpg_ls_dir\s*\(/i,
+    /\blo_export\s*\(/i,
+    /\bcopy\s*\(/i
+] as const;
 
 type AllowedStatement = typeof ALLOWED_STATEMENTS[number];
 
@@ -73,10 +76,11 @@ function getFirstKeyword(normalizedQuery: string): string {
 }
 
 /**
- * Checks if a query matches any allowed pattern that contains forbidden keywords
+ * Checks whether a query contains multiple SQL statements
  */
-function matchesAllowedPattern(normalizedQuery: string): boolean {
-    return ALLOWED_PATTERNS_WITH_FORBIDDEN_KEYWORDS.some(pattern => pattern.test(normalizedQuery));
+function containsMultipleStatements(normalizedQuery: string): boolean {
+    const withoutTrailingSemicolon = normalizedQuery.replace(/;\s*$/, '');
+    return withoutTrailingSemicolon.includes(';');
 }
 
 /**
@@ -84,11 +88,6 @@ function matchesAllowedPattern(normalizedQuery: string): boolean {
  * Uses word boundary matching to avoid false positives
  */
 function containsForbiddenKeyword(normalizedQuery: string): string | null {
-    // If the query matches an allowed pattern, don't check for forbidden keywords
-    if (matchesAllowedPattern(normalizedQuery)) {
-        return null;
-    }
-
     const upperQuery = normalizedQuery.toUpperCase();
 
     for (const keyword of FORBIDDEN_KEYWORDS) {
@@ -103,7 +102,20 @@ function containsForbiddenKeyword(normalizedQuery: string): string | null {
 }
 
 /**
- * Checks if a query is read-only (starts with allowed statement and contains no forbidden keywords)
+ * Checks if a query contains blocked function calls
+ */
+function containsBlockedFunction(normalizedQuery: string): string | null {
+    for (const pattern of BLOCKED_FUNCTION_PATTERNS) {
+        if (pattern.test(normalizedQuery)) {
+            return pattern.source;
+        }
+    }
+
+    return null;
+}
+
+/**
+ * Checks if a query is read-only (strict mode)
  * 
  * @param query - The SQL query to validate
  * @returns true if the query is read-only, false otherwise
@@ -119,6 +131,10 @@ export function isReadOnly(query: string): boolean {
         return false;
     }
 
+    if (containsMultipleStatements(normalizedQuery)) {
+        return false;
+    }
+
     // Check if query starts with an allowed statement
     const firstKeyword = getFirstKeyword(normalizedQuery);
     const isAllowedStatement = ALLOWED_STATEMENTS.includes(firstKeyword as AllowedStatement);
@@ -130,7 +146,13 @@ export function isReadOnly(query: string): boolean {
     // Check for forbidden keywords anywhere in the query
     const forbiddenKeyword = containsForbiddenKeyword(normalizedQuery);
 
-    return forbiddenKeyword === null;
+    if (forbiddenKeyword !== null) {
+        return false;
+    }
+
+    const blockedFunction = containsBlockedFunction(normalizedQuery);
+
+    return blockedFunction === null;
 }
 
 /**
@@ -157,6 +179,13 @@ export function validate(query: string): ValidationResult {
         };
     }
 
+    if (containsMultipleStatements(normalizedQuery)) {
+        return {
+            valid: false,
+            error: 'Query rejected: Multiple SQL statements are not allowed'
+        };
+    }
+
     // Get the first keyword to determine query type
     const firstKeyword = getFirstKeyword(normalizedQuery);
 
@@ -175,6 +204,15 @@ export function validate(query: string): ValidationResult {
         return {
             valid: false,
             error: `Query rejected: Contains forbidden keyword '${forbiddenKeyword}'. Data modification is not allowed.`
+        };
+    }
+
+    const blockedFunction = containsBlockedFunction(normalizedQuery);
+
+    if (blockedFunction) {
+        return {
+            valid: false,
+            error: 'Query rejected: Contains blocked function call. This is not allowed in strict mode.'
         };
     }
 

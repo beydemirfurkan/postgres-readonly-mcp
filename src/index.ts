@@ -46,6 +46,20 @@ function normalizeDatabase(input: unknown): DatabaseType | undefined {
     return undefined;
 }
 
+function parseDatabaseArg(input: unknown): DatabaseType | undefined {
+    if (input === undefined) {
+        return undefined;
+    }
+
+    const database = normalizeDatabase(input);
+
+    if (!database) {
+        throw new McpError(ErrorCode.InvalidParams, 'Invalid database. Allowed values: db, db2');
+    }
+
+    return database;
+}
+
 /**
  * Tool definitions for MCP protocol
  */
@@ -93,7 +107,7 @@ const TOOL_DEFINITIONS = [
     },
     {
         name: 'preview_data',
-        description: 'Previews table data with optional column selection, WHERE clause filtering, and automatic text truncation.',
+        description: 'Previews table data with optional column selection and automatic text truncation.',
         inputSchema: {
             type: 'object' as const,
             properties: {
@@ -118,10 +132,6 @@ const TOOL_DEFINITIONS = [
                 limit: {
                     type: 'number',
                     description: 'Maximum rows to return (default: 10, max: 100).'
-                },
-                where: {
-                    type: 'string',
-                    description: 'Optional SQL WHERE clause fragment. Example: "status = \'sent\'".'
                 }
             },
             required: ['table']
@@ -129,7 +139,7 @@ const TOOL_DEFINITIONS = [
     },
     {
         name: 'run_query',
-        description: 'Executes a custom SELECT query with validation. Only SELECT, SHOW, EXPLAIN statements are allowed. Results are limited.',
+        description: 'Executes a custom SELECT query with strict validation. Only SELECT statements are allowed. Results are server-limited.',
         inputSchema: {
             type: 'object' as const,
             properties: {
@@ -226,7 +236,7 @@ async function createServer(): Promise<Server> {
             switch (name) {
                 case 'list_tables': {
                     const input: ListTablesInput = {
-                        database: normalizeDatabase(args?.database),
+                        database: parseDatabaseArg(args?.database),
                         schema: (args?.schema as string) || undefined
                     };
                     const result = await listTables(connectionManager, input);
@@ -246,7 +256,7 @@ async function createServer(): Promise<Server> {
                     }
                     const input: DescribeTableInput = {
                         table: args.table as string,
-                        database: normalizeDatabase(args?.database),
+                        database: parseDatabaseArg(args?.database),
                         schema: (args?.schema as string) || undefined
                     };
                     const result = await describeTable(connectionManager, input);
@@ -266,11 +276,10 @@ async function createServer(): Promise<Server> {
                     }
                     const input: PreviewDataInput = {
                         table: args.table as string,
-                        database: normalizeDatabase(args?.database),
+                        database: parseDatabaseArg(args?.database),
                         schema: (args?.schema as string) || undefined,
                         columns: args?.columns as string[] | undefined,
-                        limit: args?.limit as number | undefined,
-                        where: args?.where as string | undefined
+                        limit: args?.limit as number | undefined
                     };
                     const result = await previewData(connectionManager, input);
                     return {
@@ -289,7 +298,7 @@ async function createServer(): Promise<Server> {
                     }
                     const input: RunQueryInput = {
                         query: args.query as string,
-                        database: normalizeDatabase(args?.database),
+                        database: parseDatabaseArg(args?.database),
                         limit: args?.limit as number | undefined
                     };
                     const result = await runQuery(connectionManager, input);
@@ -309,7 +318,7 @@ async function createServer(): Promise<Server> {
                     }
                     const input: ShowRelationsInput = {
                         table: args.table as string,
-                        database: normalizeDatabase(args?.database),
+                        database: parseDatabaseArg(args?.database),
                         schema: (args?.schema as string) || undefined
                     };
                     const result = await showRelations(connectionManager, input);
@@ -325,7 +334,7 @@ async function createServer(): Promise<Server> {
 
                 case 'db_stats': {
                     const input: DbStatsInput = {
-                        database: normalizeDatabase(args?.database)
+                        database: parseDatabaseArg(args?.database)
                     };
                     const result = await dbStats(connectionManager, input);
                     return {

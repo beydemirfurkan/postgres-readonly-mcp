@@ -7,7 +7,7 @@
  * @module connection-manager
  */
 
-import pg, { Pool, PoolClient, QueryResult as PgQueryResult } from 'pg';
+import pg, { Pool } from 'pg';
 import { DatabaseConfig, QueryResult, FieldInfo, LIMITS } from './types.js';
 import { validate } from './query-validator.js';
 
@@ -53,6 +53,24 @@ export function createConnectionErrorMessage(config: DatabaseConfig, error: Erro
     return `Database connection failed: ${safeDetails} - ${sanitizedError}`;
 }
 
+function parseBooleanEnv(value: string | undefined, defaultValue: boolean): boolean {
+    if (value === undefined) {
+        return defaultValue;
+    }
+
+    const normalized = value.trim().toLowerCase();
+
+    if (['1', 'true', 'yes', 'on'].includes(normalized)) {
+        return true;
+    }
+
+    if (['0', 'false', 'no', 'off'].includes(normalized)) {
+        return false;
+    }
+
+    return defaultValue;
+}
+
 
 /**
  * Connection Manager class
@@ -80,6 +98,10 @@ export class ConnectionManager {
      * Creates a PostgreSQL connection pool with optimized settings
      */
     private createPool(config: DatabaseConfig): Pool {
+        const ssl = config.ssl
+            ? { rejectUnauthorized: config.sslRejectUnauthorized ?? true }
+            : undefined;
+
         return new pg.Pool({
             host: config.host,
             port: config.port,
@@ -89,6 +111,10 @@ export class ConnectionManager {
             max: 5, // connectionLimit
             idleTimeoutMillis: 10000,
             connectionTimeoutMillis: 5000,
+            statement_timeout: LIMITS.TIMEOUT_MS,
+            query_timeout: LIMITS.TIMEOUT_MS,
+            application_name: 'postgres-readonly-mcp',
+            ssl,
         });
     }
 
@@ -141,20 +167,11 @@ export class ConnectionManager {
         }
 
         const pool = this.getPool(database);
-        const effectiveLimit = limit ?? LIMITS.QUERY_DEFAULT;
-
-        // Create timeout promise
-        const timeoutPromise = new Promise<never>((_, reject) => {
-            setTimeout(() => {
-                reject(new Error(`Query exceeded ${LIMITS.TIMEOUT_MS / 1000} second timeout limit`));
-            }, LIMITS.TIMEOUT_MS);
-        });
-
-        // Execute query with timeout
-        const queryPromise = this.executeWithLimit(pool, query, params, effectiveLimit);
+        const requestedLimit = limit ?? LIMITS.QUERY_DEFAULT;
+        const effectiveLimit = Math.max(1, Math.min(requestedLimit, LIMITS.QUERY_MAX));
 
         try {
-            const result = await Promise.race([queryPromise, timeoutPromise]);
+            const result = await this.executeWithLimit(pool, query, params, effectiveLimit);
             return result;
         } catch (error) {
             // Sanitize error message before throwing
@@ -173,7 +190,7 @@ export class ConnectionManager {
         limit: number
     ): Promise<QueryResult> {
         // Request one more row than limit to detect truncation
-        const queryWithLimit = this.addLimitToQuery(query, limit + 1);
+        const queryWithLimit = this.wrapQueryWithLimit(query, limit + 1);
 
         const result = await pool.query(queryWithLimit, params);
 
@@ -197,25 +214,9 @@ export class ConnectionManager {
         };
     }
 
-    /**
-     * Adds LIMIT clause to query if not already present
-     */
-    private addLimitToQuery(query: string, limit: number): string {
-        const normalizedQuery = query.trim().toUpperCase();
-
-        // Check if query already has LIMIT
-        if (/\bLIMIT\s+\d+/i.test(query)) {
-            return query;
-        }
-
-        // Don't add LIMIT to SHOW, DESCRIBE (Postgres uses \d but via SQL it's select), EXPLAIN
-        // In Postgres, SHOW is a command.
-        if (normalizedQuery.startsWith('SHOW') ||
-            normalizedQuery.startsWith('EXPLAIN')) {
-            return query;
-        }
-
-        return `${query.trim()} LIMIT ${limit}`;
+    private wrapQueryWithLimit(query: string, limit: number): string {
+        const trimmedQuery = query.trim().replace(/;\s*$/, '');
+        return `SELECT * FROM (${trimmedQuery}) AS mcp_readonly_subquery LIMIT ${limit}`;
     }
 
     /**
@@ -312,7 +313,9 @@ export function createConfigFromEnv(): { db: DatabaseConfig; db2: DatabaseConfig
         port: parseInt(process.env.DB_PORT || String(dbFromUrl?.port || 5432), 10),
         user: process.env.DB_USER || dbFromUrl?.user || 'postgres',
         password: process.env.DB_PASSWORD || dbFromUrl?.password || '',
-        database: process.env.DB_NAME || dbFromUrl?.database || 'postgres'
+        database: process.env.DB_NAME || dbFromUrl?.database || 'postgres',
+        ssl: parseBooleanEnv(process.env.DB_SSL, true),
+        sslRejectUnauthorized: parseBooleanEnv(process.env.DB_SSL_REJECT_UNAUTHORIZED, true)
     };
 
     const db2: DatabaseConfig = {
@@ -321,7 +324,9 @@ export function createConfigFromEnv(): { db: DatabaseConfig; db2: DatabaseConfig
         port: parseInt(process.env.DB2_PORT || String(db2FromUrl?.port || db.port || 5432), 10),
         user: process.env.DB2_USER || db2FromUrl?.user || db.user || 'postgres',
         password: process.env.DB2_PASSWORD || db2FromUrl?.password || db.password || '',
-        database: process.env.DB2_NAME || db2FromUrl?.database || 'postgres'
+        database: process.env.DB2_NAME || db2FromUrl?.database || 'postgres',
+        ssl: parseBooleanEnv(process.env.DB2_SSL, db.ssl ?? false),
+        sslRejectUnauthorized: parseBooleanEnv(process.env.DB2_SSL_REJECT_UNAUTHORIZED, db.sslRejectUnauthorized ?? true)
     };
 
     return { db, db2 };

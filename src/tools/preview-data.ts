@@ -7,7 +7,14 @@ export interface PreviewDataInput {
     schema?: string;
     columns?: string[];
     limit?: number;
-    where?: string;
+}
+
+const IDENTIFIER_REGEX = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+function assertIdentifier(value: string, fieldName: string): void {
+    if (!IDENTIFIER_REGEX.test(value)) {
+        throw new Error(`Invalid ${fieldName}. Only letters, numbers, and underscores are allowed.`);
+    }
 }
 
 export async function previewData(
@@ -19,16 +26,20 @@ export async function previewData(
     const table = input.table;
     const limit = Math.min(input.limit || LIMITS.PREVIEW_DEFAULT, LIMITS.PREVIEW_MAX);
 
+    assertIdentifier(schema, 'schema');
+    assertIdentifier(table, 'table');
+
     // Construct query
     const columnSelection = input.columns && input.columns.length > 0
-        ? input.columns.map(c => `"${c}"`).join(', ')
+        ? input.columns
+            .map(column => {
+                assertIdentifier(column, 'column');
+                return `"${column}"`;
+            })
+            .join(', ')
         : '*';
 
-    let query = `SELECT ${columnSelection} FROM "${schema}"."${table}"`;
-
-    if (input.where) {
-        query += ` WHERE ${input.where}`;
-    }
+    const query = `SELECT ${columnSelection} FROM "${schema}"."${table}"`;
 
     // Limit is handled by executeQuery, but we pass it explicitly
     // Note: executeQuery adds LIMIT if not present, but we want to ensure we don't fetch too many

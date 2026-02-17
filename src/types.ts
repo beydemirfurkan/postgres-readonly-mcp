@@ -8,6 +8,8 @@ export interface DatabaseConfig {
     user: string;
     password: string;
     database: string;
+    ssl?: boolean;
+    sslRejectUnauthorized?: boolean;
 }
 
 /**
@@ -34,7 +36,7 @@ export interface FieldInfo {
 export interface ValidationResult {
     valid: boolean;
     error?: string;
-    queryType?: 'SELECT' | 'SHOW' | 'DESCRIBE' | 'EXPLAIN';
+    queryType?: 'SELECT';
 }
 
 /**

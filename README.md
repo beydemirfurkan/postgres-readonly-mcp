@@ -17,7 +17,7 @@ This server adds a controlled layer:
 
 ## Features
 
-- Read-only access to PostgreSQL (`SELECT`, `SHOW`, `EXPLAIN`, `VALUES`, `WITH`)
+- Strict read-only access to PostgreSQL (`SELECT` only)
 - Table and schema inspection
 - Data preview with row and text truncation limits
 - Foreign key relationship discovery
@@ -69,6 +69,8 @@ DB_PORT=5432
 DB_USER=postgres
 DB_PASSWORD=your_password
 DB_NAME=your_database
+DB_SSL=true
+DB_SSL_REJECT_UNAUTHORIZED=true
 
 # Secondary database (db2)
 DB2_HOST=127.0.0.1
@@ -76,6 +78,8 @@ DB2_PORT=5432
 DB2_USER=postgres
 DB2_PASSWORD=your_password
 DB2_NAME=your_database_2
+DB2_SSL=true
+DB2_SSL_REJECT_UNAUTHORIZED=true
 ```
 
 #### Option C: Separate URLs
@@ -119,11 +123,15 @@ Add this to `claude_desktop_config.json`:
         "DB_USER": "postgres",
         "DB_PASSWORD": "your_password",
         "DB_NAME": "your_database",
+        "DB_SSL": "true",
+        "DB_SSL_REJECT_UNAUTHORIZED": "true",
         "DB2_HOST": "127.0.0.1",
         "DB2_PORT": "5432",
         "DB2_USER": "postgres",
         "DB2_PASSWORD": "your_password",
-        "DB2_NAME": "your_database_2"
+        "DB2_NAME": "your_database_2",
+        "DB2_SSL": "true",
+        "DB2_SSL_REJECT_UNAUTHORIZED": "true"
       }
     }
   }
@@ -138,9 +146,13 @@ Restart Claude Desktop after editing config.
 
 - `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME` -> primary connection (`db`)
 - `DB2_HOST`, `DB2_PORT`, `DB2_USER`, `DB2_PASSWORD`, `DB2_NAME` -> secondary connection (`db2`)
+- `DB_SSL`, `DB_SSL_REJECT_UNAUTHORIZED` -> TLS settings for `db`
+- `DB2_SSL`, `DB2_SSL_REJECT_UNAUTHORIZED` -> TLS settings for `db2`
 - `DATABASE_URL` -> fallback URL for both databases
 - `DB_URL`, `DB2_URL` -> explicit URL per database
 - `DB_DATABASE_URL`, `DB2_DATABASE_URL` -> alias URL names also supported
+
+`DB_SSL` defaults to `true` in strict mode.
 
 ### Resolution Priority
 
@@ -214,7 +226,7 @@ Input:
 
 ### 3) `preview_data`
 
-Preview rows from a table with optional column selection and filtering.
+Preview rows from a table with optional column selection.
 
 Input:
 
@@ -224,7 +236,6 @@ Input:
   "schema": "public",
   "table": "Mail",
   "columns": ["id", "subject", "createdAt"],
-  "where": "status = 'sent'",
   "limit": 10
 }
 ```
@@ -282,10 +293,6 @@ Returns:
 ### Allowed statement types
 
 - `SELECT`
-- `SHOW`
-- `EXPLAIN`
-- `VALUES`
-- `WITH`
 
 ### Blocked keywords (examples)
 
@@ -294,11 +301,17 @@ Returns:
 - `GRANT`, `REVOKE`, `LOCK`
 - `COPY`, `VACUUM`, `ANALYZE`, `REINDEX`, `CLUSTER`
 
+### Additional strict-mode checks
+
+- Multiple SQL statements in one request are blocked
+- Certain risky function calls are blocked (for example `pg_sleep`, `dblink`, file-read functions)
+- Final row cap is enforced server-side, even if your SQL includes a larger `LIMIT`
+
 ### Execution limits
 
 - `preview_data` default: `10`, max: `100`
 - `run_query` default: `1000`, max: `5000`
-- Query timeout: `30s`
+- Query timeout: `30s` (`statement_timeout` and `query_timeout`)
 - Long text truncation: `200` chars
 
 ### Error safety
@@ -366,10 +379,8 @@ npm test
 ### Query rejected
 
 - The query likely includes blocked keywords or unsupported statement type.
-- Rewrite as read-only query (`SELECT`, `SHOW`, `EXPLAIN`, `VALUES`, `WITH`).
+- Rewrite as strict read-only query (`SELECT` only).
 
 ## License
 
 MIT
-
-# postgres-readonly-mcp
