@@ -1,6 +1,6 @@
 {
     "name": "postgres-readonly-mcp",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "description": "MCP server for read-only PostgreSQL database access",
     "type": "module",
     "main": "dist/index.js",
