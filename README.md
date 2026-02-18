@@ -362,6 +362,28 @@ npm start
 npm test
 ```
 
+## Release to npm
+
+```bash
+# Patch release (1.0.0 -> 1.0.1)
+npm run release
+
+# Minor release (1.0.0 -> 1.1.0)
+npm run release:minor
+
+# Major release (1.0.0 -> 2.0.0)
+npm run release:major
+
+# Validate flow without changing anything
+npm run release:dry-run
+```
+
+Release script behavior:
+
+- Requires a clean git working tree
+- Uses `npm version` to bump version (creates commit and tag)
+- Runs `npm publish --access public` (build runs via `prepublishOnly`)
+
 ## Troubleshooting
 
 ### Connection fails
